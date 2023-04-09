@@ -8,7 +8,7 @@ Also check out: [MagLoaderThing](https://github.com/CiarenceW/MagLoaderThing), t
 
 ## Installation
 - Install the [latest BepinEx 5 release](https://github.com/BepInEx/BepInEx/releases/tag/v5.4.21) </br>
-- Extract the CustomCompoundAmmoBoxes folder to (where you have Receiver 2 installed) Receiver 2\BepInEx\plugins, very important that you don't rename the folder or change the file structure :)
+- Extract the `CustomCompoundAmmoBoxes` folder to (where you have Receiver 2 installed) `Receiver 2\BepInEx\plugins`, very important that you don't rename the folder or change the file structure :)
 
 ## Usage
 - Go to the compound, and pickup a gun that has a modded cartridge. It should appear next to the Mag Loaders, if you have that installed.  
