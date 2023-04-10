@@ -13,9 +13,12 @@ using TMPro;
 
 namespace CustomCompoundAmmoBoxes
 {
-    [BepInPlugin(PluginInfo.PLUGIN_GUID, PluginInfo.PLUGIN_NAME, PluginInfo.PLUGIN_VERSION)]
+    //that's interesting, if you reorder the letters in CCAB, you get ACAB. huh.
+    [BepInPlugin("Ciarencew.CCAB", PluginInfo.PLUGIN_NAME, "1.1.0")]
     public class CustomCompoundAmmoBoxesScript : BaseUnityPlugin
     {
+        //there might be a few things that aren't needed, maybe some fields to cleanup, etc...
+        //for now, it works fine.
         private ReceiverCoreScript RCS;
         private List<GameObject> custom_ammo_boxes = new List<GameObject>();
         private GameObject fallback_ammo_box;
@@ -25,6 +28,7 @@ namespace CustomCompoundAmmoBoxes
         private bool found_custom_ammo_box;
         private List<GameObject> tape_strips = new List<GameObject>();
         private GameObject tape_strips_text;
+        private List<GameObject> vanilla_rounds = new List<GameObject>();
         private Vector3 challenge_dome_ammo_box_pos = new Vector3(-0.39f, 0.9f, 0.23f);
         private Vector3 weapon_room_ammo_box_pos = new Vector3(3.08f, 0.99f, 20.1f);
         private Vector3 shooting_range_ammo_box_pos = new Vector3(-1.57f, 0.59f, 0.05f);
@@ -54,7 +58,7 @@ namespace CustomCompoundAmmoBoxes
             {
                 //is doing this even useful? idk.
                 ReceiverEvents.StopListening(ReceiverEventTypeVoid.PlayerPickupGun, new UnityAction<ReceiverEventTypeVoid>(PlayerPickedUpGun));
-                ReceiverEvents.StopListening(ReceiverEventTypeVoid.PlayerDropGun, new UnityAction<ReceiverEventTypeVoid>(PlayerDiscaredGun));
+                ReceiverEvents.StopListening(ReceiverEventTypeVoid.PlayerDropGun, new UnityAction<ReceiverEventTypeVoid>(PlayerDroppedGun));
                 ReceiverEvents.StopListening(ReceiverEventTypeGameObject.PlayerInteractWithObject, new UnityAction<ReceiverEventTypeGameObject, GameObject>(PlayerDiscaredItem));
                 return;
             };
@@ -68,6 +72,7 @@ namespace CustomCompoundAmmoBoxes
             }
             if (fallback_ammo_box == null) //in case of a restart
             {
+                GetVanillaRounds();
                 LoadFallbackBoxes();
                 GetCustomBoxesInDirectory();
             }
@@ -83,24 +88,24 @@ namespace CustomCompoundAmmoBoxes
             }
 
             ReceiverEvents.StartListening(ReceiverEventTypeVoid.PlayerPickupGun, new UnityAction<ReceiverEventTypeVoid>(PlayerPickedUpGun));
-            ReceiverEvents.StartListening(ReceiverEventTypeVoid.PlayerDropGun, new UnityAction<ReceiverEventTypeVoid>(PlayerDiscaredGun)); //in case I decide to make that weird QoL mod I've been thinking of doing.
+            ReceiverEvents.StartListening(ReceiverEventTypeVoid.PlayerDropGun, new UnityAction<ReceiverEventTypeVoid>(PlayerDroppedGun)); //in case I decide to make that weird QoL mod I've been thinking of doing.
             ReceiverEvents.StartListening(ReceiverEventTypeGameObject.PlayerInteractWithObject, new UnityAction<ReceiverEventTypeGameObject, GameObject>(PlayerDiscaredItem));
         }
 
-        private void PlayerDiscaredGun(ReceiverEventTypeVoid ev)
+        private void PlayerDroppedGun(ReceiverEventTypeVoid ev)
         {
             DestroyCustomBoxes();
         }
         private void PlayerDiscaredItem(ReceiverEventTypeGameObject ev, GameObject gameobject)
         {
-            if (gameobject.TryGetComponent<Pegboard>(out _) || gameobject.TryGetComponent<GunPlacementSlot>(out _))
+            if ((gameobject.TryGetComponent<Pegboard>(out _) || gameobject.TryGetComponent<GunPlacementSlot>(out _)))
             {
                 if (!RCS.player.lah.TryGetGun(out _))
                 {
-                    Debug.Log("player discarded his gun, destroying custom box");
+                    Debug.Log("player discarded his gun, checking if custom box needs destroying");
                     DestroyCustomBoxes(); //if the player doesn't have a gun, destroy em.
                 }
-                else Debug.Log("player still has his gun");
+                else Debug.Log("player still has his gun, won't destroy ammo boxes.");
             }
         }
 
@@ -110,6 +115,19 @@ namespace CustomCompoundAmmoBoxes
             if (TryGetCustomAmmoBoxForCurrentRound())
             {
                 SpawnCustomBoxes();
+            }
+        }
+
+        private void GetVanillaRounds()
+        {
+            var shooting_range_table = transform.Find("/Shooting Range/Gameplay/Ammo Tables");
+            foreach (Transform ammo_box in shooting_range_table)
+            {
+                ShootingRangeAmmoBoxScript srab; //srab is the acronym for Shooting Range Ammo Box, I know, very catchy
+                if (ammo_box.TryGetComponent<ShootingRangeAmmoBoxScript>(out srab))
+                {
+                    vanilla_rounds.Add(srab.round_prefab);
+                }
             }
         }
 
@@ -263,18 +281,49 @@ namespace CustomCompoundAmmoBoxes
                     found_custom_ammo_box = true;
                     Debug.LogFormat("Found an custom ammo box matching the current cartridge ({0})", RCS.RoundPrefab.name);
                     current_ammo_box = ammo_box;
-                    SetCustomTapeStrips(current_ammo_box);
+                    SetCustomTapeStrips(current_ammo_box, RCS.RoundPrefab.name);
                     return true;
                 }
             }
             if (!found_custom_ammo_box) //has a custom ammo box for the currect cartridge been found?
             {
-                if (!RCS.RoundPrefab.GetComponent<ShellCasingScript>().InternalName.StartsWith("wolfire."))
+                if (!vanilla_rounds.Contains(RCS.RoundPrefab))
                 {
-                    Debug.LogWarning("No custom ammo boxes matching current cartridge were found, falling back to default");
+                    string round_name;
+                    if (!RCS.RoundPrefab.GetComponent<ShellCasingScript>().InternalName.StartsWith("wolfire."))
+                    {
+                        Debug.LogWarning("No custom ammo boxes matching current modded cartridge were found, falling back to default");
+                        round_name = RCS.RoundPrefab.name;
+                    }
+                    else
+                    {
+                        Debug.LogWarning("This vanilla round does not have an ammo box for it. Assigning fallback...");
+                        switch (RCS.RoundPrefab.GetComponent<ShellCasingScript>().cartridge_type)
+                        {
+                            case CartridgeSpec.Preset._556_NATO:
+                                round_name = "5.56x45mm";
+                                break;
+                            case CartridgeSpec.Preset._50_BMG:
+                                round_name = ".50 BMG";
+                                break;
+                            case CartridgeSpec.Preset._22_LR:
+                                round_name = ".22 LR";
+                                break;
+                            case CartridgeSpec.Preset._762_soviet:
+                                round_name = "7.62 Soviet";
+                                break;
+                            case CartridgeSpec.Preset._40_SW:
+                                round_name = ".40 S&W";
+                                break;
+                            default:
+                                Debug.LogErrorFormat("This vanilla round doesn't have a case for it, maybe ask the developer of this mod");
+                                round_name = "uh, this shouldn't happen. :(";
+                                break;
+                        }
+                    }
                     current_ammo_box = fallback_ammo_box;
                     current_ammo_box.GetComponent<ShootingRangeAmmoBoxScript>().round_prefab = RCS.RoundPrefab;
-                    SetCustomTapeStrips(fallback_ammo_box);
+                    SetCustomTapeStrips(fallback_ammo_box, round_name);
                     return true;
                 }
             }
@@ -282,7 +331,7 @@ namespace CustomCompoundAmmoBoxes
             return false;
         }
 
-        private void SetCustomTapeStrips(GameObject ammo_box)
+        private void SetCustomTapeStrips(GameObject ammo_box, string round_name)
         {
             var tape_strips_fallback = new GameObject(string.Format("Tape {0}", current_ammo_box.GetComponent<ShootingRangeAmmoBoxScript>().round_prefab.name));
             tape_strips_fallback.transform.parent = ammo_box.transform;
@@ -294,7 +343,7 @@ namespace CustomCompoundAmmoBoxes
                 current_tape_strips.Add(new_tape_strip);
             }
             current_tape_strip_text = UnityEngine.Object.Instantiate(tape_strips_text, tape_strips_fallback.transform).GetComponent<TextMeshPro>();
-            current_tape_strip_text.text = RCS.RoundPrefab.name;
+            current_tape_strip_text.text = round_name;
             current_tape_strip_text.GetTextInfo(current_tape_strip_text.text); //even though it does it on its own when you instantiate an object (I think), you still have to do it manually, so dumb.
             if (current_tape_strips.Count != 0)
             {
@@ -302,14 +351,16 @@ namespace CustomCompoundAmmoBoxes
                 for (i = 0; i < current_tape_strips.Count - 1; i++)
                 {
                     var tape_strip_text_x = current_tape_strip_text.textBounds.extents.x;
-                    var tape_strip_x = current_tape_strips[i].GetComponent<MeshRenderer>().bounds.extents.x;
-                    if (tape_strip_text_x > tape_strip_x)
+                    var tape_strip_z = current_tape_strips[i].GetComponent<MeshFilter>().mesh.bounds.extents.z;
+                    if (tape_strip_z < tape_strip_text_x)
                     {
+                        Debug.LogFormat("{0} > {1}", tape_strip_z, tape_strip_text_x);
                         break;
                     }
+                    Debug.LogFormat("{0} < {1}", tape_strip_z, tape_strip_text_x);
                     //Debug.Log(string.Format("{0} > {1}", tape_strip_text_x, tape_strip_x));
                 }
-                current_tape_strips[i].SetActive(true);
+                current_tape_strips[Mathf.Clamp(i - 1, 0, current_tape_strips.Count - 1)].SetActive(true);
             }
             Debug.Log("Custom tape strips set!");
         }
