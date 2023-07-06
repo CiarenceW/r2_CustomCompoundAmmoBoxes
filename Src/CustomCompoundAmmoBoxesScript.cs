@@ -10,6 +10,7 @@ using System.Collections.Generic;
 using System.Reflection;
 using UnityEngine.Events;
 using TMPro;
+using System;
 
 namespace CustomCompoundAmmoBoxes
 {
@@ -32,14 +33,26 @@ namespace CustomCompoundAmmoBoxes
         private Vector3 challenge_dome_ammo_box_pos = new Vector3(-0.39f, 0.9f, 0.23f);
         private Vector3 weapon_room_ammo_box_pos = new Vector3(3.08f, 0.99f, 20.1f);
         private Vector3 shooting_range_ammo_box_pos = new Vector3(-1.57f, 0.59f, 0.05f);
-        private FieldInfo asset_bundles_field;
         private GameObject current_ammo_box;
         private List<GameObject> current_tape_strips = new List<GameObject>();
         private TextMeshPro current_tape_strip_text;
 
-        private List<AssetBundle> Asset_Bundles
+        private AssetBundle[] Asset_Bundles
         {
-            get { return (List<AssetBundle>)asset_bundles_field.GetValue(RCS); }
+            get
+            {
+                //I FUCKING LOVE REFLECTIONSSSSSSSSS
+                /*var assetBundlesRCS = ((List<AssetBundle>)AccessTools.Field(typeof(ReceiverCoreScript), "asset_bundles").GetValue(ReceiverCoreScript.Instance()));
+                if (assetBundlesRCS.Count > 0)
+                {
+                    return assetBundlesRCS.ToArray();
+                }*/
+
+                //this whole thing up there is useless because sometimes (????) the RCS's asset_bundles field has stuff in it? but idk why?
+                //and when I tried it the FN57 didn't appear but all other guns did (??????????)
+                //so whatever fuck it let's sift through a million asset bundles (actually like 20 or so)
+                return AssetBundle.GetAllLoadedAssetBundles_Native(); //arrays are faster to look through.
+            }
         }
 
         private void Awake()
@@ -48,6 +61,7 @@ namespace CustomCompoundAmmoBoxes
             Logger.LogInfo($"Plugin {PluginInfo.PLUGIN_GUID} is loaded!");
 
             ReceiverEvents.StartListening(ReceiverEventTypeVoid.PlayerInitialized, new UnityAction<ReceiverEventTypeVoid>(PlayerInitialized));
+
         }
 
         private void PlayerInitialized(ReceiverEventTypeVoid ev)
@@ -63,18 +77,19 @@ namespace CustomCompoundAmmoBoxes
                 return;
             };
 
-            //I FUCKING LOVE REFLECTIONSSSSSSSSS
-            asset_bundles_field = typeof(ReceiverCoreScript).GetField("asset_bundles", BindingFlags.Instance | BindingFlags.NonPublic);
 
             if (tape_strips == null || tape_strips_text == null)
             {
                 GetTapeStrips();
             }
-            if (fallback_ammo_box == null) //in case of a restart
+            if (vanilla_rounds.Count == 0) //in case of a restart
             {
                 GetVanillaRounds();
+            }
+            if (fallback_ammo_box == null) //just in case
+            {
                 LoadFallbackBoxes();
-                GetCustomBoxesInDirectory();
+                GetCustomBoxes();
             }
             else Debug.LogWarning("Already assigned custom ammo boxes, skipping...");
 
@@ -148,9 +163,49 @@ namespace CustomCompoundAmmoBoxes
                 }
             }
         }
+        private void SetCustomTapeStrips(GameObject ammo_box, string round_name)
+        {
+            var tape_strips_fallback = new GameObject(string.Format("Tape {0}", current_ammo_box.GetComponent<ShootingRangeAmmoBoxScript>().round_prefab.name));
+            tape_strips_fallback.transform.parent = ammo_box.transform;
+            tape_strips_fallback.transform.localPosition = new Vector3(0.125f, 0.012f, 0f);
+            foreach (GameObject tape_strip in tape_strips)
+            {
+                var new_tape_strip = UnityEngine.Object.Instantiate(tape_strip, tape_strips_fallback.transform);
+                new_tape_strip.SetActive(false);
+                current_tape_strips.Add(new_tape_strip);
+            }
+            current_tape_strip_text = UnityEngine.Object.Instantiate(tape_strips_text, tape_strips_fallback.transform).GetComponent<TextMeshPro>();
+            current_tape_strip_text.text = round_name;
+            current_tape_strip_text.GetTextInfo(current_tape_strip_text.text); //even though it does it on its own when you instantiate an object (I think), you still have to do it manually, so dumb.
+            if (current_tape_strips.Count != 0)
+            {
+                int i;
+                for (i = 0; i < current_tape_strips.Count - 1; i++)
+                {
+                    var tape_strip_text_x = current_tape_strip_text.textBounds.extents.x;
+                    var tape_strip_z = current_tape_strips[i].GetComponent<MeshFilter>().mesh.bounds.extents.z;
+                    if (tape_strip_z < tape_strip_text_x)
+                    {
+                        Debug.LogFormat("{0} > {1}", tape_strip_z, tape_strip_text_x);
+                        break;
+                    }
+                    Debug.LogFormat("{0} < {1}", tape_strip_z, tape_strip_text_x);
+                    //Debug.Log(string.Format("{0} > {1}", tape_strip_text_x, tape_strip_x));
+                }
+                current_tape_strips[Mathf.Clamp(i - 1, 0, current_tape_strips.Count - 1)].SetActive(true);
+            }
+            Debug.Log("Custom tape strips set!");
+        }
 
         private void DestroyCustomBoxes()
         {
+            if (current_tape_strips.Count != 0)
+            {
+                var parent = current_tape_strip_text.gameObject.transform.parent;
+                current_tape_strips.Clear();
+                current_tape_strip_text = null;
+                Destroy(parent.gameObject);
+            }
             if (challenge_dome_ammo_box != null) Destroy(challenge_dome_ammo_box);
             if (weapon_room_ammo_box != null) Destroy(weapon_room_ammo_box);
             if (shooting_range_ammo_box != null) Destroy(shooting_range_ammo_box);
@@ -182,20 +237,25 @@ namespace CustomCompoundAmmoBoxes
 
         private void LoadFallbackBoxes()
         {
-            Debug.Log(Paths.PluginPath + "/CustomCompoundAmmoBoxes");
-            if (Directory.Exists(Paths.PluginPath + "/CustomCompoundAmmoBoxes" + "/Boxes"))
+            string current_directory = Path.GetDirectoryName(new Uri(Assembly.GetExecutingAssembly().CodeBase).LocalPath);
+            Debug.Log(current_directory);
+            if (Directory.Exists(current_directory)) //don't need to check but whatevs
             {
-                var fallback_ammo_box_strings = Directory.GetFiles(Paths.PluginPath + "/CustomCompoundAmmoBoxes" + "/Boxes");
+                var fallback_ammo_box_strings = Directory.GetFiles(current_directory);
                 for (int i = 0; i < fallback_ammo_box_strings.Length; i++)
                 {
                     string fileName = fallback_ammo_box_strings[i];
                     if (fileName.Contains(SystemInfo.operatingSystemFamily.ToString().ToLower()))
                     {
-                        var assetBundle = AssetBundle.LoadFromFile(fileName);
+                        AssetBundle assetBundle = AssetBundle.GetAllLoadedAssetBundles().FirstOrDefault((AssetBundle bundle) => bundle.name.Contains(Path.GetFileNameWithoutExtension(fileName)));
                         if (assetBundle == null)
                         {
-                            Debug.LogWarning("Failed to load AssetBundle " + fileName);
-                            return;
+                            assetBundle = AssetBundle.LoadFromFile(fileName);
+                            if (assetBundle == null)
+                            {
+                                Debug.LogWarning("Failed to load AssetBundle " + fileName);
+                                return;
+                            }
                         }
                         string text = Path.GetFileNameWithoutExtension(fileName);
                         foreach (string asset_name in assetBundle.GetAllAssetNames())
@@ -203,8 +263,7 @@ namespace CustomCompoundAmmoBoxes
                             GameObject gameObject = assetBundle.LoadAsset<GameObject>(asset_name);
                             if (gameObject != null)
                             {
-                                ShootingRangeAmmoBoxScript ammo_box_script = gameObject.GetComponent<ShootingRangeAmmoBoxScript>();
-                                if (ammo_box_script != null)
+                                if (gameObject.TryGetComponent<ShootingRangeAmmoBoxScript>(out ShootingRangeAmmoBoxScript ammo_box_script))
                                 {
                                     fallback_ammo_box = gameObject;
                                     Debug.Log("Found the fallback_ammo_box and assigned it");
@@ -223,11 +282,11 @@ namespace CustomCompoundAmmoBoxes
             else Debug.LogError("Fallback boxes directory is non-existent, time to shit and cum!");
         }
 
-        private void GetCustomBoxesInDirectory()
+        private void GetCustomBoxes()
         {
-            foreach (AssetBundle assetBundle in Asset_Bundles)
+            for (int i = 0; i < Asset_Bundles.Length; i++) //for loops on arrays are about 5 times faster than foreach loops on lists
             {
-                LoadCustomAmmoBoxes(assetBundle);
+                LoadCustomAmmoBoxes(Asset_Bundles[i]); 
             }
             if (custom_ammo_boxes == null)
             {
@@ -238,13 +297,14 @@ namespace CustomCompoundAmmoBoxes
 
         private void LoadCustomAmmoBoxes(AssetBundle assetBundle)
         {
-            foreach (string asset_name in assetBundle.GetAllAssetNames())
+            if (assetBundle.name.StartsWith("fallback_ammo_box")) return;
+            var assetNames = assetBundle.GetAllAssetNames();
+            for (int i = 0; i < assetNames.Length; i++)
             {
-                GameObject gameObject = assetBundle.LoadAsset<GameObject>(asset_name);
+                GameObject gameObject = assetBundle.LoadAsset<GameObject>(assetNames[i]);
                 if (gameObject != null)
                 {
-                    ShootingRangeAmmoBoxScript ammo_box_script = gameObject.GetComponent<ShootingRangeAmmoBoxScript>();
-                    if (ammo_box_script != null)
+                    if (gameObject.TryGetComponent<ShootingRangeAmmoBoxScript>(out ShootingRangeAmmoBoxScript ammo_box_script))
                     {
                         custom_ammo_boxes.Add(gameObject);
                         Debug.Log(string.Format("Found the custom ammo box for {0} and added it to the list", ammo_box_script.round_prefab.GetComponent<ShellCasingScript>().InternalName));
@@ -331,38 +391,5 @@ namespace CustomCompoundAmmoBoxes
             return false;
         }
 
-        private void SetCustomTapeStrips(GameObject ammo_box, string round_name)
-        {
-            var tape_strips_fallback = new GameObject(string.Format("Tape {0}", current_ammo_box.GetComponent<ShootingRangeAmmoBoxScript>().round_prefab.name));
-            tape_strips_fallback.transform.parent = ammo_box.transform;
-            tape_strips_fallback.transform.localPosition = new Vector3(0.125f, 0.012f, 0f);
-            foreach (GameObject tape_strip in tape_strips)
-            {
-                var new_tape_strip = UnityEngine.Object.Instantiate(tape_strip, tape_strips_fallback.transform);
-                new_tape_strip.SetActive(false);
-                current_tape_strips.Add(new_tape_strip);
-            }
-            current_tape_strip_text = UnityEngine.Object.Instantiate(tape_strips_text, tape_strips_fallback.transform).GetComponent<TextMeshPro>();
-            current_tape_strip_text.text = round_name;
-            current_tape_strip_text.GetTextInfo(current_tape_strip_text.text); //even though it does it on its own when you instantiate an object (I think), you still have to do it manually, so dumb.
-            if (current_tape_strips.Count != 0)
-            {
-                int i;
-                for (i = 0; i < current_tape_strips.Count - 1; i++)
-                {
-                    var tape_strip_text_x = current_tape_strip_text.textBounds.extents.x;
-                    var tape_strip_z = current_tape_strips[i].GetComponent<MeshFilter>().mesh.bounds.extents.z;
-                    if (tape_strip_z < tape_strip_text_x)
-                    {
-                        Debug.LogFormat("{0} > {1}", tape_strip_z, tape_strip_text_x);
-                        break;
-                    }
-                    Debug.LogFormat("{0} < {1}", tape_strip_z, tape_strip_text_x);
-                    //Debug.Log(string.Format("{0} > {1}", tape_strip_text_x, tape_strip_x));
-                }
-                current_tape_strips[Mathf.Clamp(i - 1, 0, current_tape_strips.Count - 1)].SetActive(true);
-            }
-            Debug.Log("Custom tape strips set!");
-        }
     }
 }
